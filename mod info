@@ -1,0 +1,284 @@
+Reversing Candy Crush 1.13.0.
+
+Please note: I don't have any strong background in reverse engineering. I tried to figure this
+out from scratch using some assembly knowledge from my Introduction to ECE class and the ARMv7
+(iPhone/iPad/iPod Touch) architecture manual and a debugger.
+
+This requires a decrypted IPA for the Candy Crush game v1.13.0.
+This is copyrighted software so I can't distribute the binary but you can do this yourself
+by reading about it elsewhere as long as you have a jailbroken iDevice.
+
+Take the decypted binary from the IPA (unzips to Payload/candycrushsaga/candycrushsaga).
+
+iOS applications are compiled to ARMv7 machine code (ARMv6 for older devices), so you
+should have a debugger/disassembler that can support that architecture and a reference manual.
+I have a Mac so there are built-in disassemblers available. You can also search online.
+Github has some disassembler plugins available for popular debuggers.
+I'll be using the ARMv7 Architecture Reference Manual. In addition, you should have a hex
+editor available in order to change the necessary instructions.
+
+With that out of the way, let's get to the fun stuff!
+
+Throughout my study of the Candy Crush v1.12.0 binary, I've been able to accomplish a few simple
+things without any trouble:
+
+1. Making all candy swaps think that two chocolate bombs were swapped (triggering the destruction of all candies on the board).
+2. Guaranteeing a win regardless of the user's success.
+3. Unlocking all levels.
+
+I noticed during play that many levels are not conducive to the first cheat above. That is, it is still really hard to gain a high score (and rank highly on the score list) by simply destroying every candy. However, the bonus for completing the objectives early with many moves remaining should always give a high score and 3 stars.
+
+Therefore in this v1.13.0 update, I seek to guarantee a win on a level as soon as it is opened and maintain the unlock status of all levels as in my previous modification.
+
+It's important to point out here that iOS applications are compiled and distributed through the App Store with debug symbols intact. This greatly increases the ease with which modified versions of the applications can be enabled. The tradeoff however is that the applications cannot easily be debugged. I think it's possible to use gdb remotely on an iOS device but I haven't attempted it.
+
+From my previous study of the candycrush binary, I found a function called
+"CGameLogic::IsLevelSuccess(void)", which I modified to return true in all cases. However,
+this function is called when all objectives have been completed, the user has exited, or all
+moves have been used up. I want to achieve a strong final score by triggering this function
+at the beginning of the game.
+
+In the previous version of the binary, several functions were called
+after each move to check the status of various game objectives.
+
+__text:0004A458                 PUSH            {R4,R7,LR}
+__text:0004A45A                 ADD             R7, SP, #4
+__text:0004A45C                 MOV             R4, R0
+__text:0004A45E                 BL              __ZN10CGameLogic26LevelRequirementsFulfilledEv ; CGameLogic::LevelRequirementsFulfilled(void)
+__text:0004A462                 MOV             R1, R0
+__text:0004A464                 MOVS            R0, #0
+__text:0004A466                 CMP             R1, #1
+__text:0004A468                 IT NE
+__text:0004A46A                 POPNE           {R4,R7,PC}
+__text:0004A46C                 LDR.W           R1, [R4,#0x1E4]
+__text:0004A470                 LDRB.W          R1, [R1,#0x90]
+__text:0004A474                 CMP             R1, #0
+__text:0004A476                 IT EQ
+__text:0004A478                 MOVEQ           R0, #1
+__text:0004A47A                 POP             {R4,R7,PC}
+
+The important components of the function translate directly to the following pseudocode:
+
+CGameLogic::IsLevelSuccess(void)
+{
+	R0 = CGameLogic::LevelRequirementsFulfilled(void);
+	R1 = R0;
+	R0 = 0;
+	if (r1 != 1) return R0;
+	if (r1 == 0)
+	{
+		R0 == 1;
+	}
+}
+
+or more simply:
+
+CGameLogic::IsLevelSuccess(void)
+{
+	return !CGameLogic::LevelRequirementsFulfilled(void);
+}
+
+Therefore our stronger result (immediate success for the level) should come from the
+CGameLogic::LevelRequirementsFulfilled(void) function, which we will make always return true (1). The SetState function calls CGameLogic::LevelRequirementsFulfilled(void), so most likely it updates after every move.
+
+We can modify the function which branches out into many cases (checking multiple requirements for game success) to simply set R0, the return register, to 1 and then return from the function.
+
+The beginning of the functions features the boilerplate code
+PUSH            {R4-R7,LR}
+ADD             R7, SP, #0xC
+SUB             SP, SP, #8
+MOV             R4, R0
+
+so we can modify the following instructions, namely
+
+MOVS            R0, #0
+LDRB.W          R1, [R4,#0x1DC]
+CMP             R1, #0
+...
+
+to contain
+
+MOVS		R0, #1
+ADD             SP, SP, #8
+POP             {R4-R7,PC}
+
+where the last two instructions are the boilerplate code for returning from this function, copied from its actual return location.
+
+I inspect the segment containing MOVS R0, #0 in the binary and see:
+00 20 94 F8 DC 11 00 29 40 F0 82 80 21 69 00 25
+
+I will search for this segment to modify in the binary when I do my hex edit.
+According the the ARMv7-M reference manual,
+MOVS R0,#0
+is represented by
+0b0010000000000000
+which is
+0x2000
+in hexidecimal.
+The ARMv7 architecture uses little endian word representation, so we see the first two bytes are "00 20". We will replace this with "01 20" followed by the return ADD and POP:
+
+ADD             SP, SP, #8
+POP             {R4-R7,PC}
+
+So from the segment at the end:
+
+02 B0 F0 BD 90 B5 04 46 01 AF E0 68 02 28 18 BF
+
+ADD must be B002 and POP must be BDF0
+
+ADD SP, SP, #8
+(SP is the stack pointer)
+SP is the stack pointer, R13
+so this is equivalent to
+ADD R13,R13,#8
+According to the reference manual,
+this is encoded as
+1011000000001000
+B002
+exactly as we expected.
+
+Then we POP {R4-R7, PC}
+This is represented as:
+1011110111110000
+which is also BDFO as we predicted.
+
+so we overwrite the instructions following our MOV R0,#1 to include
+02 B0 F0 BD (little endian)
+In summary, we go to our 
+00 20 94 F8 DC 11
+and replace it with
+01 20 02 B0 F0 BD
+I think this is really cool! We change 6 bytes in the assembly and now we always win!
+
+I'm going to verify this before moving on.
+Yup, it works! Now exiting a game will always yield a victory.
+But it's not triggering a bonus session as soon as the game start like I wanted.
+Let's investigate further...
+
+I just found a method called TickSugarCrush. It's called by TickBoard, which I believe is the function that does all the operations during each "tick" of the board (explain this).
+
+I need to completely analyse the TickBoard method.
+
+It seems that Tick can call TickBoard or TickSugarCrush... gonna confirm this.
+
+...
+
+and other type of Tick:
+function CBoardItem::Tick(CTimer const&, bool) {
+    *(r0 + 0x24) = *(r1 + 0x4) + *(r0 + 0x24);
+    if (*(r0 + 0x44) < 0x1) goto loc_0x16756;
+    goto loc_1674a;
+
+loc_16756:
+    if (*(r0 + 0x28) != 0x4) goto loc_0x16788;
+    goto loc_1675c;
+
+loc_16788:
+    if (r1 != 0x1) goto loc_0x167b0;
+    goto loc_1678c;
+
+loc_167b0:
+    if (r1 - 0x2 > 0x1) goto loc_0x16808;
+    goto loc_167b6;
+
+loc_16808:
+    *(r0 + 0x50) = *(r0 + 0x50) - 0x1;
+    return r0;
+
+loc_167b6:
+    if (*(int8_t *)(r0 + 0x59) == 0x0) goto loc_0x167f2;
+    goto loc_167be;
+
+loc_167f2:
+
+loc_167f6:
+    asm{ vcmpe.f32  s0, #0x0 };
+    asm{ vmrs       APSR_nzcv, fpscr };
+    asm{ itttt      eq };
+    goto loc_16808;
+
+loc_167be:
+     = 0x5;
+    asm{ vcvteq.f32.s32  d18, d0 };
+    asm{ vcvteq.f32.s32  d17, d1 };
+    asm{ vaddeq.f32  d1, d18, d16 };
+    asm{ vaddeq.f32  d2, d17, d0 };
+    asm{ vcmpe.f32  s4, s2 };
+    asm{ vmrs       APSR_nzcv, fpscr };
+    asm{ itt        gt };
+    goto loc_167f6;
+
+loc_1678c:
+    asm{ vcmpegt.f32  s0, #0x0 };
+    asm{ vmrsgt     APSR_nzcv, fpscr };
+    if (CPU_EFLAGS & FLG_NE) goto loc_16808;
+
+loc_1675c:
+    asm{ vcvt.f32.s32  d1, d1 };
+    asm{ vcmpe.f32  s0, s2 };
+    asm{ vmrs       APSR_nzcv, fpscr };
+    if (CPU_EFLAGS & FLG_LE) goto loc_16808;
+
+loc_1674a:
+    asm{ itt        eq };
+    goto loc_16756;
+}
+
+The real meat:
+CGameLogic::TickBoard
+
+This is probably the most central function to the operation of the entire game.
+
+Through an analysis of the TickBoard function, I found that the TickSugarCrush method
+is called when the original function is called with (r0 + 0xc == 0xc). r0 in this case
+is "CTimer const&" according to the debug symbols, so I'll investigate where this address
+plus 0xC is set.
+
+In Tick, *(r10 + 0xC) == 0xF, they continue. Maybe "r10 + 0xC" is important.
+r10 comes from r0 which is also passed as CTimer in the debug symbols. We have
+to go deeper!
+
+Tick is called by CGameLogic::Update
+
+
+Sidebar...
+45D62 is address where the lives are decreases
+
+I see a bunch of checks for BoardHasJellyLeft in SetState, so we should patch that to always be true.
+
+Also, we need to make isLevelUnlocked and (optionally) isWorldUnlocked always return true.
+
+Also, CGameStore::ProductIsPurchased
+
+For BoardHasJellyLeft a similar effect is in place. The beginning of the code looks like this:
+
+PUSH            {R4-R7,LR}
+ADD             R7, SP, #0xC
+STR.W           R8, [SP,#0xC+var_10]!
+SUB             SP, SP, #8
+MOV             R4, R0
+...
+It clearly goes on to check for jelly in each location on the board by calling CBoard::GetGridItem.
+
+Anyways, I just want to do like I did before. I'm going to set r0 to 1 and return immediately after the sub instruction (remember this is the stack pointer).
+
+01 20 02 B0 F0 BD
+
+Woah. Now it crashes. I think I'll set r0 to 1 before it exits because I'm messing up the stack here.
+
+So at the end of the function, 0846 represents
+mov r0,r1
+
+I'll just make that 01 20 because that's movs r0,#1
+
+that works...
+
+interesting segment at:
+46C64
+
+another one:
+47FE8
+let's have it always sugar crush
+0x4280 to CMP r0,r0 from user manual (always true)
+so my third mod makes sure we don't branch over the sugar crush. i hope it works!
+yeah it didn't...

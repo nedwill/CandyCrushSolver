@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Model for storing Candy information here
-
-# Candy cells
-
 import sys
 import copy
 import math
@@ -12,17 +8,61 @@ import os.path
 import pickle
 
 """
+CandyCrush Optimized!
+
+This program will take a user entered board and return the best possible
+sequence of moves as a set of tuples indicating the indices of each swap.
+
+It takes advantage of all the information present in order to provide
+the best possible next move(s) for a given board.
+
+Essentially this program plays all sets of legal move sequences from the user-
+provided Candy Crush board and returns the sequence with the greatest score
+per move.
+
+This program is a good way to get past the tricky levels and expose the great
+extent to which this game provides boards that cannot be defeated with near-perfect
+play, ensuring that users will get frustrated and purchase powerups.
+
+Some boards are faster to solve than others, so be patient if it takes time. The search
+can go 10 or more moves deep at times, including creating and breaking special candies.
+Fortunately it should speed up over time as you play more boards. All boards that have
+ever been solved are stored in a hash table that is persistent (on disk) between sessions.
+
+More technical info: I recreated the game's core functionality (colored candies, matching,
+special candies, combos). I only use sets of moves that can't be affected by falling pieces,
+so the moves here are guaranteed to work.
+
+Figuring out the falling behavior in the game was tricky. It's animated so it doesn't appear
+to follow a strict pattern, relying on a timer of some sort, but instead, all pieces fall down
+one "tick" at a time and pieces that align during these "ticks" are broken if they form a 3-or-more
+combo. The 
+
+Note:
+Some higher levels including newer types of candies haven't been implemented. Make the
+closest possible recreation - this is just a proof of concept!
+
 Todo:
-combos!!!!!!
-striped candy hitting bomb
-two stripes...
-overcounting jelly removal for background jellies?
-falling around barriers! and just dropping through holes e.g. level 32
-!!!!!!! level 35 has both types
-new types of empty... regular falling (drop, already mostly implemented),
+Some rare combos need implementation:
+    Striped candy/bomb
+    Striped/Striped
+Different types of empty cells... regular falling (drop, already mostly implemented),
     hole that hides the candy, hole that the candy can't fall into (hardest, figure out pattern)
-rework entire code from Cell class... this is too dirty
-mongodb
+
+Freeze with:
+
+rybrygoyb
+gboyobgoo
+gorygrgrp
+yygppbpog
+obogbgppb
+rygygrrby
+oprrpgbgp
+gorprbbyo
+pbgobbrrb
+
+???
+
 """
 
 class Cell(object):
@@ -134,7 +174,7 @@ class Wrapped(Special):
         self.exploded = True
 
 class CandyBoard(object):
-    def __init__(self,goal,test=False,maxDepth=-1):
+    def __init__(self,goal="score",test=False,maxDepth=-1):
         self.empty = ["x"]
         self.dropName = [" "]
         self.candyNames = ["g","b","r","p","y","o","m"]
@@ -156,6 +196,7 @@ class CandyBoard(object):
             #initialize board here?
             self.runTests() #is this a dirty way of testing?
         self.printInstructions()
+        self.autoInput()
 
     def getPiece(self,row,col,board=None):
         if board == None:
@@ -828,7 +869,29 @@ class CandyBoard(object):
         ###search for all isUnknowns in the map, prompt for what they now are one at a time
 
     def printInstructions(self):
-        print "Instructions..."
+        print """
+        Type in your 9x9 board using the following rules:
+        x = Empty cell that candy cannot fall into
+        \" \" (space) = Empty cell that candy can fall into
+        d = Dud (cherry, nut, something that needs to fall to the bottom)
+        j = jelly piece (needs combo next to it to break)
+
+        o = orange
+        b = blue
+        g = green
+        y = yellow
+        r = red
+
+        Special:
+        m = Bomb
+
+        Prefixes:
+        h = horizontal stipes
+        v = vertical stripes
+        1/2 = thickness of jelly in background
+
+        Press enter after each line.
+        """
 
     def runTests(self):
         sample = ["rbdgpbgrr","godyryppb","bbdyvgpror","rpdrrpbyo","brdoJyryd",
@@ -841,3 +904,5 @@ class CandyBoard(object):
         #swap 2 that have a match
         #self.printLines()
         pass
+
+CandyBoard()
